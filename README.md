@@ -6,7 +6,7 @@ STM32F407 talking to AWS IoT Core over MQTT, using an ESP32 as a WiFi/TLS bridge
 
 - STM32F407G-DISC1
 - ESP32 module (AT firmware)
-- PIR motion sensor
+- HC-SR501 PIR motion sensor
 
 ## How it works
 

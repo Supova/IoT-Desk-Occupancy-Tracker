@@ -21,6 +21,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "esp32_at.h"
+#include "application_config.h"
+#include "mqtt_helper.h"
 
 /* USER CODE END Includes */
 
@@ -100,6 +103,49 @@ int main(void)
   MX_I2C1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+
+  /* Step 1: Initialize the ESP32 Wi-Fi module*/
+  LogInfo(("Initializing Wi-Fi module..."));
+   if (esp32_init() != ESP32_OK){
+ 	  LogError(("Failed to initialize Wi-Fi module."));
+ 	  Error_Handler();
+   }
+   LogInfo(("Wi-Fi module initialized successfully!\n"));
+
+   /* Step 2: Connect to the Wi-Fi network*/
+   LogInfo(("Joining Access Point: '%s' ...", WIFI_SSID));
+   /* Keep attempting to connect to the specified Wi-Fi access point until
+    * successful */
+   while (esp32_join_ap((uint8_t *)WIFI_SSID, (uint8_t *)WIFI_PASSWORD) !=
+          ESP32_OK) {
+     LogInfo(("Retrying to join Access Point: %s", WIFI_SSID));
+   }
+   LogInfo(("Successfully joined Access Point: %s", WIFI_SSID));
+
+   /* Step 3: Configure SNTP for time synchronization */
+   if (esp32_config_sntp(UTC_OFFSET) != ESP32_OK) {
+       LogError(("Failed to configure SNTP."));
+       Error_Handler();
+     }
+     LogInfo(("SNTP configured !"));
+
+     /* Retrieve the current time from SNTP */
+     sntp_time_t sntp_time;
+     if (esp32_get_sntp_time(&sntp_time) != ESP32_OK) {
+       LogError(("Failed to retrieve current time from SNTP."));
+       Error_Handler();
+     }
+     LogInfo(("SNTP time retrieved: %s, %02d %s %04d %02d:%02d:%02d",
+              sntp_time.day, sntp_time.date, sntp_time.month, sntp_time.year,
+              sntp_time.hour, sntp_time.min, sntp_time.sec));
+
+     /* Step 4: Configure the MQTT client for TLS */
+     LogInfo(("Connecting to MQTT broker at %s:%d...", MQTT_BROKER, MQTT_PORT));
+     if (mqtt_connect(CLIENT_ID, MQTT_BROKER, MQTT_PORT) != MQTT_SUCCESS) {
+         LogError(("MQTT connection failed."));
+         Error_Handler();
+       }
+       LogInfo(("Successfully connected to MQTT broker: %s", MQTT_BROKER));
 
   /* USER CODE END 2 */
 
@@ -297,6 +343,10 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+//int _write(int file, char *ptr, int len) {
+//    HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, HAL_MAX_DELAY); // replace with your UART handler
+//    return len;
+//}
 
 /* USER CODE END 4 */
 
