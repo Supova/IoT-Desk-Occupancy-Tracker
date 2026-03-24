@@ -45,7 +45,7 @@ mqtt_status_t mqtt_connect(char *thingname, char *host, uint16_t port) {
     /* Fill host and port */
     connect_info.p_host = host;
     connect_info.p_port = port;
-    connect_info.reconnect = MQTT_RECONNECT_ENABLE;
+    connect_info.reconnect = MQTT_RECONNECT_DISABLE;
 
     /* Step 1: Configure MQTT user settings */
     mqtt_status = esp32_mqtt_configure(&connect_info);

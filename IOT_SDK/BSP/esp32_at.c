@@ -326,6 +326,12 @@ esp32_status_t esp32_mqtt_configure(const mqtt_connection_info_t *p_conn_info) {
         return ESP32_ERROR;
     }
 
+    /* Clean any previous MQTT session stored in NVS */
+    memset(at_cmd, '\0', MAX_AT_CMD_SIZE);
+    snprintf(at_cmd, MAX_AT_CMD_SIZE, "AT+MQTTCLEAN=0%s", AT_CMD_TERMINATOR);
+    run_at_cmd((uint8_t *)at_cmd, strlen(at_cmd), (uint8_t *)AT_OK_STRING);
+    /* Ignore return value — clean may fail if no previous session exists */
+
     /* Configure MQTT User Info (Client ID, Auth, Certs) */
     memset(at_cmd, '\0', MAX_AT_CMD_SIZE);
     snprintf((char *)at_cmd, MAX_AT_CMD_SIZE,
