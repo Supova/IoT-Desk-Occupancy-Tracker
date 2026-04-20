@@ -94,9 +94,9 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="BSP/sh1106.c|BSP/utils/oled_util.c" flags="VALUE_WORKSPACE_PATH" kind="sourcePath" name="IOT_SDK"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
+						<entry excluding="BSP/hdc1080.c|BSP/sh1106.c|BSP/utils/oled_util.c" flags="VALUE_WORKSPACE_PATH" kind="sourcePath" name="IOT_SDK"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>

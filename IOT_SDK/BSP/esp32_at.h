@@ -23,6 +23,7 @@
 #define AT_SEND_OK_STRING       "SEND OK\r\n"
 #define AT_SEND_PROMPT_STRING   "OK\r\n\r\n>"
 #define AT_ERROR_STRING         "ERROR\r\n"
+#define AT_FAIL_STRING          "FAIL\r\n"
 #define AT_IPD_STRING           "+IPD,"
 #define AT_HTTPCGET_STRING      "+HTTPCGET:"
 
