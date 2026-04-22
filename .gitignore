@@ -22,6 +22,13 @@ Release/
 *.bak
 .mxproject
 
+# VS Code
+.vscode/
+*.code-workspace
+.clang-format
+compile_commands.json
+
 # Other
 CLAUDE.MD
 notes.MD
+DESIGN.md

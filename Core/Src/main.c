@@ -31,12 +31,16 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef enum { SESSION_IDLE, SESSION_SITTING, SESSION_GRACE } session_state_t;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define HEARTBEAT_INTERVAL_MS (5 * 60 * 1000) // 5 mins
+#define GRACE_PERIOD_MS (3 * 60 * 1000)           // 3 mins
+#define MQTT_PAYLOAD_MAX_LEN 64
+#define MS_TO_MIN(ms) ((ms) / 60000UL)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -51,6 +55,8 @@ DMA_HandleTypeDef hdma_uart4_rx;
 
 /* USER CODE BEGIN PV */
 volatile uint8_t pir_motion_detected = 0;
+uint32_t boot_epoch_s = 0;
+uint32_t boot_tick_ms = 0;
 
 /* USER CODE END PV */
 
@@ -68,7 +74,126 @@ static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN 0 */
 
 void mqtt_publish_task(void *parameters) {
+	uint32_t now_s = 0;
+	uint32_t hh = 0;
+	uint32_t mm = 0;
+	uint32_t ss = 0;
+
+	session_state_t session_state = SESSION_IDLE;
+	uint32_t session_start_ms = 0;
+	uint32_t last_heartbeat_ms = 0;
+	uint32_t grace_start_ms = 0;
+	uint32_t current_time_ms = 0;
+	uint32_t session_duration_mins = 0;
+	char json_payload[MQTT_PAYLOAD_MAX_LEN];
+
 	while (1) {
+		current_time_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+		now_s = (boot_epoch_s + (current_time_ms - boot_tick_ms) / 1000) % 86400;
+		hh = now_s / 3600;
+		mm = (now_s % 3600) / 60;
+		ss = now_s % 60;
+
+		switch (session_state) {
+			case SESSION_IDLE:
+				if (pir_motion_detected) {
+					session_start_ms = current_time_ms;
+					last_heartbeat_ms = current_time_ms; // every 5 mins
+					// since we publishing on event trigger
+					size_t payload_len =
+					    snprintf(json_payload, sizeof(json_payload), "{\"sitting\":true,\"duration_mins\": 0}");
+					mqtt_status_t status =
+					    mqtt_publish(MOTION_TOPIC, strlen(MOTION_TOPIC), (uint8_t *)json_payload, payload_len);
+
+					if (status == MQTT_SUCCESS) {
+						LogInfo(("MQTT Publish Successful: Topic='%s'", MOTION_TOPIC));
+					} else {
+						LogError(("MQTT Publish Failed: Topic='%s'", MOTION_TOPIC));
+					}
+
+					LogDebug(("PIR triggered - session started at %02lu:%02lu:%02lu", hh, mm, ss));
+					session_state = SESSION_SITTING;
+				}
+				break;
+
+			case SESSION_SITTING: // pir HIGH
+				// if last state was sitting, how long did i sit for?
+				// if more than 5 minutes, then publish the data
+
+				// am i still sitting? -no
+				if (!pir_motion_detected) {
+					grace_start_ms = current_time_ms;
+					LogDebug(("Motion lost - entering grace period at %02lu:%02lu:%02lu", hh, mm, ss));
+					session_state = SESSION_GRACE;
+				} else {
+					// if i am still sitting right now
+					// check if enough time has passed for a heart beat
+					// if so, publish a message with the current session duration
+					if (current_time_ms - last_heartbeat_ms >= HEARTBEAT_INTERVAL_MS) {
+						session_duration_mins = MS_TO_MIN(current_time_ms - session_start_ms);
+						size_t payload_len = snprintf(
+						    json_payload,
+						    sizeof(json_payload),
+						    "{\"sitting\":true,\"duration_mins\": %lu}",
+						    session_duration_mins
+						);
+
+						mqtt_status_t status =
+						    mqtt_publish(MOTION_TOPIC, strlen(MOTION_TOPIC), (uint8_t *)json_payload, payload_len);
+
+						if (status == MQTT_SUCCESS) {
+							LogInfo(("MQTT Publish Successful: Topic='%s'", MOTION_TOPIC));
+						} else {
+							LogError(("MQTT Publish Failed: Topic='%s'", MOTION_TOPIC));
+						}
+
+						LogDebug(
+						    ("Heartbeat publish - duration_mins: %lu at %02lu:%02lu:%02lu", session_duration_mins, hh, mm, ss)
+						);
+
+						last_heartbeat_ms = current_time_ms; // published the data so reset it
+					}
+				}
+				break;
+
+			case SESSION_GRACE: // grace timer running
+				// motion in grace period
+				if (pir_motion_detected) {
+					LogDebug(("Motion resumed in grace period at %02lu:%02lu:%02lu - back to SITTING", hh, mm, ss));
+					session_state = SESSION_SITTING;
+				} else {
+					// no motion in grace period
+					// check if 60s passed (task will be checked twice in this period)
+					if (current_time_ms - grace_start_ms >= GRACE_PERIOD_MS) {
+						// publish total time
+						session_duration_mins = MS_TO_MIN(current_time_ms - session_start_ms);
+						size_t payload_len = snprintf(
+						    json_payload,
+						    sizeof(json_payload),
+						    "{\"session_end\":true,\"total_duration_mins\": %lu}",
+						    session_duration_mins
+						);
+
+						mqtt_status_t status =
+						    mqtt_publish(MOTION_TOPIC, strlen(MOTION_TOPIC), (uint8_t *)json_payload, payload_len);
+
+						if (status == MQTT_SUCCESS) {
+							LogInfo(("MQTT Publish Successful: Topic='%s'", MOTION_TOPIC));
+						} else {
+							LogError(("MQTT Publish Failed: Topic='%s'", MOTION_TOPIC));
+						}
+
+						LogDebug(
+						    ("Grace period expired at %02lu:%02lu:%02lu - session ended, total_mins: %lu",
+						     hh, mm, ss,
+						     session_duration_mins)
+						);
+						session_state = SESSION_IDLE;
+					}
+				}
+				break;
+		}
+		vTaskDelay(pdMS_TO_TICKS(500));
 	}
 }
 
@@ -112,7 +237,7 @@ int main(void) {
 	MX_USART2_UART_Init();
 	/* USER CODE BEGIN 2 */
 
-	/* Step 1: Initialize the ESP32 Wi-Fi module*/
+	/* Initialize the ESP32 Wi-Fi module*/
 	LogInfo(("Initializing Wi-Fi module..."));
 	if (esp32_init() != ESP32_OK) {
 		LogError(("Failed to initialize Wi-Fi module."));
@@ -120,17 +245,16 @@ int main(void) {
 	}
 	LogInfo(("Wi-Fi module initialized successfully!\n"));
 
-	/* Step 2: Connect to the Wi-Fi network*/
+	/* Connect to the Wi-Fi network*/
 	LogInfo(("Joining Access Point: '%s' ...", WIFI_SSID));
 	/* Keep attempting to connect to the specified Wi-Fi access point until
 	 * successful */
-	while (esp32_join_ap((uint8_t*) WIFI_SSID, (uint8_t*) WIFI_PASSWORD)
-			!= ESP32_OK) {
+	while (esp32_join_ap((uint8_t *)WIFI_SSID, (uint8_t *)WIFI_PASSWORD) != ESP32_OK) {
 		LogInfo(("Retrying to join Access Point: %s", WIFI_SSID));
 	}
 	LogInfo(("Successfully joined Access Point: %s", WIFI_SSID));
 
-	/* Step 3: Configure SNTP for time synchronization */
+	/* Configure SNTP for time synchronization */
 	if (esp32_config_sntp(UTC_OFFSET) != ESP32_OK) {
 		LogError(("Failed to configure SNTP."));
 		Error_Handler();
@@ -143,10 +267,22 @@ int main(void) {
 		LogError(("Failed to retrieve current time from SNTP."));
 		Error_Handler();
 	}
-	LogInfo(
-			("SNTP time retrieved: %s, %02d %s %04d %02d:%02d:%02d", sntp_time.day, sntp_time.date, sntp_time.month, sntp_time.year, sntp_time.hour, sntp_time.min, sntp_time.sec));
 
-	/* Step 4: Configure the MQTT client for TLS */
+	boot_epoch_s = sntp_time.hour * 3600 + sntp_time.min * 60 + sntp_time.sec;
+	boot_tick_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+
+	LogInfo(
+	    ("SNTP time retrieved: %s, %02d %s %04d %02d:%02d:%02d",
+	     sntp_time.day,
+	     sntp_time.date,
+	     sntp_time.month,
+	     sntp_time.year,
+	     sntp_time.hour,
+	     sntp_time.min,
+	     sntp_time.sec)
+	);
+
+	/* Configure the MQTT client for TLS */
 	LogInfo(("Connecting to MQTT broker at %s:%d...", MQTT_BROKER, MQTT_PORT));
 	if (mqtt_connect(CLIENT_ID, MQTT_BROKER, MQTT_PORT) != MQTT_SUCCESS) {
 		LogError(("MQTT connection failed."));
@@ -154,15 +290,15 @@ int main(void) {
 	}
 	LogInfo(("Successfully connected to MQTT broker: %s", MQTT_BROKER));
 
-	// create 2 freertos tasks
 	BaseType_t status;
-	status = xTaskCreate(mqtt_publish_task, "Publish sensor data", 2048, NULL,
-			1, NULL);
+	status = xTaskCreate(mqtt_publish_task, "Publish sensor data", 2048, NULL, 1, NULL);
 	configASSERT(status == pdPASS);
 
-	status = xTaskCreate(mqtt_receive_task, "Receive sensor data", 2048, NULL,
-			2, NULL);
-	configASSERT(status == pdPASS);
+	// status = xTaskCreate(mqtt_receive_task, "Receive sensor data", 2048, NULL,
+	// 		2, NULL);
+	// configASSERT(status == pdPASS);
+
+	vTaskStartScheduler();
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
@@ -180,8 +316,8 @@ int main(void) {
  * @retval None
  */
 void SystemClock_Config(void) {
-	RCC_OscInitTypeDef RCC_OscInitStruct = { 0 };
-	RCC_ClkInitTypeDef RCC_ClkInitStruct = { 0 };
+	RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+	RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
 	/** Configure the main internal regulator output voltage
 	 */
@@ -206,8 +342,7 @@ void SystemClock_Config(void) {
 
 	/** Initializes the CPU, AHB and APB buses clocks
 	 */
-	RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
-			| RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+	RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
 	RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
 	RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
 	RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
@@ -246,7 +381,6 @@ static void MX_UART4_Init(void) {
 	/* USER CODE BEGIN UART4_Init 2 */
 
 	/* USER CODE END UART4_Init 2 */
-
 }
 
 /**
@@ -277,7 +411,6 @@ static void MX_USART2_UART_Init(void) {
 	/* USER CODE BEGIN USART2_Init 2 */
 
 	/* USER CODE END USART2_Init 2 */
-
 }
 
 /**
@@ -292,7 +425,6 @@ static void MX_DMA_Init(void) {
 	/* DMA1_Stream2_IRQn interrupt configuration */
 	HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, 0, 0);
 	HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
-
 }
 
 /**
@@ -301,7 +433,7 @@ static void MX_DMA_Init(void) {
  * @retval None
  */
 static void MX_GPIO_Init(void) {
-	GPIO_InitTypeDef GPIO_InitStruct = { 0 };
+	GPIO_InitTypeDef GPIO_InitStruct = {0};
 	/* USER CODE BEGIN MX_GPIO_Init_1 */
 
 	/* USER CODE END MX_GPIO_Init_1 */
@@ -367,17 +499,16 @@ void Error_Handler(void) {
 }
 #ifdef USE_FULL_ASSERT
 /**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
-void assert_failed(uint8_t *file, uint32_t line)
-{
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
+ * @brief  Reports the name of the source file and the source line number
+ *         where the assert_param error has occurred.
+ * @param  file: pointer to the source file name
+ * @param  line: assert_param error line source number
+ * @retval None
+ */
+void assert_failed(uint8_t *file, uint32_t line) {
+	/* USER CODE BEGIN 6 */
+	/* User can add his own implementation to report the file name and line number,
+	   ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+	/* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
