@@ -26,6 +26,7 @@
 #include "mqtt_helper.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "queue.h"
 
 /* USER CODE END Includes */
 
@@ -38,7 +39,7 @@ typedef enum { SESSION_IDLE, SESSION_SITTING, SESSION_GRACE } session_state_t;
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define HEARTBEAT_INTERVAL_MS (5 * 60 * 1000) // 5 mins
-#define GRACE_PERIOD_MS (3 * 60 * 1000)           // 3 mins
+#define GRACE_PERIOD_MS (3 * 60 * 1000)       // 3 mins
 #define MQTT_PAYLOAD_MAX_LEN 64
 #define MS_TO_MIN(ms) ((ms) / 60000UL)
 /* USER CODE END PD */
@@ -57,6 +58,9 @@ DMA_HandleTypeDef hdma_uart4_rx;
 volatile uint8_t pir_motion_detected = 0;
 uint32_t boot_epoch_s = 0;
 uint32_t boot_tick_ms = 0;
+
+QueueHandle_t mqtt_tx_queue;
+QueueHandle_t mqtt_rx_queue;
 
 /* USER CODE END PV */
 
@@ -85,7 +89,12 @@ void mqtt_publish_task(void *parameters) {
 	uint32_t grace_start_ms = 0;
 	uint32_t current_time_ms = 0;
 	uint32_t session_duration_mins = 0;
-	char json_payload[MQTT_PAYLOAD_MAX_LEN];
+
+	mqtt_queue_item_t item = {
+	    .operation = MQTT_OPERATION_PUBLISH,
+	    .topic = MOTION_TOPIC,
+	    .topic_length = strlen(MOTION_TOPIC),
+	};
 
 	while (1) {
 		current_time_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
@@ -101,14 +110,16 @@ void mqtt_publish_task(void *parameters) {
 					last_heartbeat_ms = current_time_ms; // every 5 mins
 					// since we publishing on event trigger
 					size_t payload_len =
-					    snprintf(json_payload, sizeof(json_payload), "{\"sitting\":true,\"duration_mins\": 0}");
-					mqtt_status_t status =
-					    mqtt_publish(MOTION_TOPIC, strlen(MOTION_TOPIC), (uint8_t *)json_payload, payload_len);
+					    snprintf((char *)item.payload, sizeof(item.payload), "{\"sitting\":true,\"duration_mins\": 0}");
 
-					if (status == MQTT_SUCCESS) {
-						LogInfo(("MQTT Publish Successful: Topic='%s'", MOTION_TOPIC));
+					item.payload_length = payload_len;
+
+					// post an item to queue
+					// ! where is portMAX_DELAY defined?
+					if (xQueueSend(mqtt_tx_queue, &item, portMAX_DELAY) == pdPASS) {
+						LogInfo(("Queued MQTT publish: Topic='%s'", MOTION_TOPIC));
 					} else {
-						LogError(("MQTT Publish Failed: Topic='%s'", MOTION_TOPIC));
+						LogError(("Failed to queue MQTT publish: Topic='%s'", MOTION_TOPIC));
 					}
 
 					LogDebug(("PIR triggered - session started at %02lu:%02lu:%02lu", hh, mm, ss));
@@ -132,23 +143,25 @@ void mqtt_publish_task(void *parameters) {
 					if (current_time_ms - last_heartbeat_ms >= HEARTBEAT_INTERVAL_MS) {
 						session_duration_mins = MS_TO_MIN(current_time_ms - session_start_ms);
 						size_t payload_len = snprintf(
-						    json_payload,
-						    sizeof(json_payload),
+						    (char *)item.payload,
+						    sizeof(item.payload),
 						    "{\"sitting\":true,\"duration_mins\": %lu}",
 						    session_duration_mins
 						);
+						item.payload_length = payload_len;
 
-						mqtt_status_t status =
-						    mqtt_publish(MOTION_TOPIC, strlen(MOTION_TOPIC), (uint8_t *)json_payload, payload_len);
-
-						if (status == MQTT_SUCCESS) {
-							LogInfo(("MQTT Publish Successful: Topic='%s'", MOTION_TOPIC));
+						if (xQueueSend(mqtt_tx_queue, &item, portMAX_DELAY) == pdPASS) {
+							LogInfo(("Queued MQTT publish: Topic='%s'", MOTION_TOPIC));
 						} else {
-							LogError(("MQTT Publish Failed: Topic='%s'", MOTION_TOPIC));
+							LogError(("Failed to queue MQTT publish: Topic='%s'", MOTION_TOPIC));
 						}
 
 						LogDebug(
-						    ("Heartbeat publish - duration_mins: %lu at %02lu:%02lu:%02lu", session_duration_mins, hh, mm, ss)
+						    ("Heartbeat publish - duration_mins: %lu at %02lu:%02lu:%02lu",
+						     session_duration_mins,
+						     hh,
+						     mm,
+						     ss)
 						);
 
 						last_heartbeat_ms = current_time_ms; // published the data so reset it
@@ -168,24 +181,24 @@ void mqtt_publish_task(void *parameters) {
 						// publish total time
 						session_duration_mins = MS_TO_MIN(current_time_ms - session_start_ms);
 						size_t payload_len = snprintf(
-						    json_payload,
-						    sizeof(json_payload),
+						    (char *)item.payload,
+						    sizeof(item.payload),
 						    "{\"session_end\":true,\"total_duration_mins\": %lu}",
 						    session_duration_mins
 						);
+						item.payload_length = payload_len;
 
-						mqtt_status_t status =
-						    mqtt_publish(MOTION_TOPIC, strlen(MOTION_TOPIC), (uint8_t *)json_payload, payload_len);
-
-						if (status == MQTT_SUCCESS) {
-							LogInfo(("MQTT Publish Successful: Topic='%s'", MOTION_TOPIC));
+						if (xQueueSend(mqtt_tx_queue, &item, portMAX_DELAY) == pdPASS) {
+							LogInfo(("Queued MQTT publish: Topic='%s'", MOTION_TOPIC));
 						} else {
-							LogError(("MQTT Publish Failed: Topic='%s'", MOTION_TOPIC));
+							LogError(("Failed to queue MQTT publish: Topic='%s'", MOTION_TOPIC));
 						}
 
 						LogDebug(
 						    ("Grace period expired at %02lu:%02lu:%02lu - session ended, total_mins: %lu",
-						     hh, mm, ss,
+						     hh,
+						     mm,
+						     ss,
 						     session_duration_mins)
 						);
 						session_state = SESSION_IDLE;
@@ -193,12 +206,83 @@ void mqtt_publish_task(void *parameters) {
 				}
 				break;
 		}
-		vTaskDelay(pdMS_TO_TICKS(500));
+		vTaskDelay(pdMS_TO_TICKS(MQTT_PUBLISH_TIME_BETWEEN_MS));
 	}
 }
 
+// this task recieves unsollicited messages from aws server
 void mqtt_receive_task(void *parameters) {
+	mqtt_queue_item_t item;
+
 	while (1) {
+		xQueueReceive(mqtt_rx_queue, &item, portMAX_DELAY);
+
+		if (item.operation == MQTT_OPERATION_RECEIVE && item.topic_length > 0 && item.payload_length > 0) {
+			LogInfo(("\r\nReceived message:"));
+			LogInfo(("Topic: %.*s", (int)item.topic_length, item.topic));
+			LogInfo(("Message: %.*s", (int)item.payload_length, item.payload));
+		}
+	}
+}
+
+void at_cmd_dispatcher_task(void *parameters) {
+	(void)parameters;
+
+	mqtt_queue_item_t item, new_message = {0};
+	mqtt_receive_t mqtt_data = {0};
+	mqtt_status_t status = MQTT_ERROR;
+
+	static char topic_buffer[MAX_MQTT_TOPIC_SIZE];
+	static char payload_buffer[MAX_MQTT_PAYLOAD_SIZE];
+
+	mqtt_data.p_payload = payload_buffer;
+	mqtt_data.p_topic = topic_buffer;
+	mqtt_data.topic_length = sizeof(topic_buffer);
+	mqtt_data.payload_length = sizeof(payload_buffer);
+
+	// 1. De-queue MQTT TX queue
+	if (xQueueReceive(mqtt_tx_queue, &item, 0) == pdPASS) {
+		if (item.operation == MQTT_OPERATION_PUBLISH) {
+
+			// 2. Send MQTT publish AT command using mqtt_publish()
+			status = mqtt_publish(item.topic, item.topic_length, item.payload, item.payload_length);
+
+			if (status == MQTT_SUCCESS) {
+				LogInfo(
+				    ("MQTT Publish successful: Topic='%.*s', Payload='%.*s'",
+				     (int)item.topic_length,
+				     item.topic,
+				     (int)item.payload_length,
+				     (char *)item.payload)
+				);
+			} else {
+				LogError(("MQTT Publish failed: Topic='%.*s'", (int)item.topic_length, item.topic));
+			}
+
+		} else if (item.operation == MQTT_OPERATION_SUBSCRIBE) {
+			// 2. Send MQTT subscribe AT command using mqtt_subscribe()
+			status = mqtt_subscribe(item.topic, item.topic_length);
+			if (status == MQTT_SUCCESS) {
+				LogInfo(("MQTT Subscribe successful: Topic='%.*s'", (int)item.topic_length, item.topic));
+			} else {
+				LogError(("MQTT Subscribe failed: Topic='%.*s'", (int)item.topic_length, item.topic));
+			}
+		}
+	}
+
+	// 3. check for incoming MQTT data (check esp32_recv_mqtt_data() in  esp32_at.c)
+	esp32_status_t rx_status = esp32_recv_mqtt_data(&mqtt_data);
+
+	if (rx_status != ESP32_ERROR && mqtt_data.payload_length > 0) {
+		new_message.operation = MQTT_OPERATION_RECEIVE;
+		new_message.payload_length = mqtt_data.payload_length;
+		new_message.topic_length = mqtt_data.topic_length;
+		memcpy(new_message.payload, mqtt_data.p_payload, mqtt_data.payload_length);
+		memcpy(new_message.topic, mqtt_data.p_topic, mqtt_data.topic_length);
+
+		if (xQueueSend(mqtt_rx_queue, &new_message, 0) == pdPASS) {
+			LogInfo(("Queued MQTT receive: Topic='%.*s'", (int)new_message.topic_length, new_message.topic));
+		}
 	}
 }
 
@@ -290,13 +374,34 @@ int main(void) {
 	}
 	LogInfo(("Successfully connected to MQTT broker: %s", MQTT_BROKER));
 
+	LogInfo(("Subscribing to topic: %s", SENSOR_DATA_TOPIC));
+	if (mqtt_subscribe(SENSOR_DATA_TOPIC, strlen(SENSOR_DATA_TOPIC)) != MQTT_SUCCESS) {
+		LogError(("Subscription to topic '%s' failed.", SENSOR_DATA_TOPIC));
+		Error_Handler();
+	}
+	LogInfo(("Successfully Subscribed to topic: %s", SENSOR_DATA_TOPIC));
+
+	/* Create queues */
+	// queue length = 5
+	mqtt_tx_queue = xQueueCreate(5, sizeof(mqtt_queue_item_t));
+	mqtt_rx_queue = xQueueCreate(5, sizeof(mqtt_queue_item_t));
+
+	if ((mqtt_tx_queue == NULL) || (mqtt_rx_queue == NULL)) {
+		LogError(("Queue creation failed."));
+		Error_Handler();
+	} else {
+		LogInfo(("MQTT RX and TX queues successfully created."));
+	}
+
 	BaseType_t status;
-	status = xTaskCreate(mqtt_publish_task, "Publish sensor data", 2048, NULL, 1, NULL);
+	status = xTaskCreate(mqtt_publish_task, "Publish sensor data", 2048, NULL, 2, NULL);
 	configASSERT(status == pdPASS);
 
-	// status = xTaskCreate(mqtt_receive_task, "Receive sensor data", 2048, NULL,
-	// 		2, NULL);
-	// configASSERT(status == pdPASS);
+	status = xTaskCreate(mqtt_receive_task, "Receive sensor data", 2048, NULL, 2, NULL);
+	configASSERT(status == pdPASS);
+
+	status = xTaskCreate(at_cmd_dispatcher_task, "MQTT Send and Receive", 2048, NULL, 1, NULL);
+	configASSERT(status == pdPASS);
 
 	vTaskStartScheduler();
 	/* USER CODE END 2 */
