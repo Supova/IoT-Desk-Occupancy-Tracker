@@ -5,6 +5,8 @@
  * DO NOT commit application_config.h to version control.
  */
 
+#error "This is the example config. Copy this file to application_config.h, fill in your values, and remove this line."
+
 #ifndef INC_APPLICATION_CONFIG_H_
 #define INC_APPLICATION_CONFIG_H_
 
@@ -37,7 +39,7 @@
 #define CLIENT_ID                          "your-thing-name"
 
 /* Timezone offset from UTC in hours (e.g. 5 for PKT, 8 for CST) */
-#define UTC_OFFSET                         5
+#define UTC_OFFSET                         X
 
 /* MQTT Topics */
 #define MOTION_TOPIC                       "sensors/room1/motion"
