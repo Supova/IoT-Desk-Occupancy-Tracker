@@ -201,7 +201,7 @@ void mqtt_publish_task(void *parameters) {
 	}
 }
 
-/* Logs incoming MQTT messages received from AWS via mqtt_rx_queue */
+/* Logs incoming MQTT messages */
 void mqtt_receive_task(void *parameters) {
 	mqtt_queue_item_t item;
 
@@ -209,7 +209,6 @@ void mqtt_receive_task(void *parameters) {
 		xQueueReceive(mqtt_rx_queue, &item, portMAX_DELAY);
 
 		if (item.operation == MQTT_OPERATION_RECEIVE && item.topic_length > 0 && item.payload_length > 0) {
-			LogInfo(("\r\nReceived message:"));
 			LogInfo(("Topic: %.*s", (int)item.topic_length, item.topic));
 			LogInfo(("Message: %.*s", (int)item.payload_length, item.payload));
 		}
@@ -376,6 +375,7 @@ int main(void) {
 		Error_Handler();
 	}
 	LogInfo(("Successfully Subscribed to topic: %s", MOTION_TOPIC));
+
 
 	mqtt_tx_queue = xQueueCreate(5, sizeof(mqtt_queue_item_t));
 	mqtt_rx_queue = xQueueCreate(5, sizeof(mqtt_queue_item_t));
