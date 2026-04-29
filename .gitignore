@@ -1,5 +1,5 @@
 # Secret credentials — copy application_config.h.example and fill in your values
-IOT_SDK/config/application_config.h
+**/IOT_SDK/config/application_config.h
 
 # TLS certificates and private keys (never commit these)
 *.pem
@@ -12,7 +12,7 @@ certificates/
 # STM32CubeIDE build output
 Debug/
 Release/
-*.launch 
+*.launch
 
 # IDE metadata (optional — remove these lines if you want to commit IDE settings)
 .metadata/
@@ -29,5 +29,5 @@ Release/
 compile_commands.json
 
 # Other
-CLAUDE.MD
+CLAUDE.md
 Notes/

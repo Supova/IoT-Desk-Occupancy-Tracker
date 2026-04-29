@@ -2,6 +2,13 @@
 
 An embedded IoT project running on the **STM32F407G-DISC1** discovery board. A PIR sensor detects whether someone is seated at a desk. The firmware tracks session duration and publishes updates to **AWS IoT Core** over MQTT/TLS, routed through an **ESP32** Wi-Fi module controlled entirely via AT commands over UART.
 
+## Projects
+
+| Directory | Description |
+|-----------|-------------|
+| `001_MQTT_Subscribe_Publish/` | PIR sitting session tracker with FreeRTOS — publishes session data to AWS IoT Core |
+| `002_OTA_Firmware_Update/` | Extends project 1 with OTA firmware update via AWS IoT Jobs and MQTT File Streams |
+
 ---
 
 ## What it does
@@ -54,12 +61,12 @@ The ESP32 acts purely as a modem here. The STM32 owns all the application logic.
 
 Three FreeRTOS tasks, one queue-based UART dispatcher:
 
-![System architecture](Docs/system_architecture.jpg)
+![System architecture](001_MQTT_Subscribe_Publish/Docs/system_architecture.jpg)
 
 
 **Sitting session state machine:**
 
-![PIR session state machine](Docs/pir_state_machine.png)
+![PIR session state machine](001_MQTT_Subscribe_Publish/Docs/pir_state_machine.png)
 
 - `SESSION_IDLE` — waiting for PIR trigger
 - `SESSION_SITTING` — active session, heartbeat every 5 minutes
@@ -87,7 +94,7 @@ The certificates are stored in the ESP32's flash and persist across resets. They
 Copy the example config and fill in your values:
 
 ```
-IOT_SDK/config/application_config_example.h  →  IOT_SDK/config/application_config.h
+001_MQTT_Subscribe_Publish/IOT_SDK/config/application_config_example.h  →  001_MQTT_Subscribe_Publish/IOT_SDK/config/application_config.h
 ```
 
 ```c
@@ -104,7 +111,7 @@ IOT_SDK/config/application_config_example.h  →  IOT_SDK/config/application_con
 
 This project uses the **STM32CubeIDE** toolchain (Eclipse CDT managed build, `arm-none-eabi-gcc`). There is no standalone Makefile and building outside of STM32CubeIDE would require manually reconstructing the include paths, compiler flags, and linker script configuration.
 
-Open the project folder in STM32CubeIDE, build, and flash via onboard debugger.
+Open the desired project subfolder in STM32CubeIDE, build, and flash via onboard debugger.
 
 
 ### 5. Verify
@@ -123,15 +130,19 @@ Watch the debug output on USART2.
 ## Project structure
 
 ```
-Core/Src/main.c                   — application entry, FreeRTOS tasks, PIR ISR
-IOT_SDK/BSP/esp32_at.c            — AT command wrappers (connect, publish, subscribe, receive)
-IOT_SDK/BSP/esp32_at_io.c         — DMA circular buffer RX, UART send/receive primitives
-IOT_SDK/mqtt_helper/mqtt_helper.c — MQTT connect/publish/subscribe built on esp32_at.c
-IOT_SDK/config/application_config.h — all credentials and constants (not committed)
+001_MQTT_Subscribe_Publish/
+  Core/Src/main.c                   — application entry, FreeRTOS tasks, PIR ISR
+  IOT_SDK/BSP/esp32_at.c            — AT command wrappers (connect, publish, subscribe, receive)
+  IOT_SDK/BSP/esp32_at_io.c         — DMA circular buffer RX, UART send/receive primitives
+  IOT_SDK/mqtt_helper/mqtt_helper.c — MQTT connect/publish/subscribe built on esp32_at.c
+  IOT_SDK/config/application_config.h — all credentials and constants (not committed)
+
+002_OTA_Firmware_Update/
+  Core/Src/ota_application.c        — AWS IoT Jobs + MQTT File Streams download and flash logic
+  IOT_SDK/BSP/utils/ota_flash.c     — STM32 internal flash erase/write
 ```
 
-Third-party code under `IOT_SDK/Thirdparty/`:
+Third-party code under `IOT_SDK/Thirdparty/` in each project:
 - FreeRTOS Kernel (ARM Cortex-M4F port)
 - AWS IoT Jobs SDK and MQTT File Downloader
 - coreJSON, tinyCBOR
-
