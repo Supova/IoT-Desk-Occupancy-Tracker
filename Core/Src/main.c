@@ -77,6 +77,7 @@ static void MX_USART2_UART_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* PIR sitting session state machine - queues MQTT publishes to mqtt_tx_queue */
 void mqtt_publish_task(void *parameters) {
 	uint32_t now_s = 0;
 	uint32_t hh = 0;
@@ -108,14 +109,11 @@ void mqtt_publish_task(void *parameters) {
 				if (pir_motion_detected) {
 					session_start_ms = current_time_ms;
 					last_heartbeat_ms = current_time_ms; // every 5 mins
-					// since we publishing on event trigger
 					size_t payload_len =
-					    snprintf((char *)item.payload, sizeof(item.payload), "{\"sitting\":true,\"duration_mins\": 0}");
+					    snprintf((char *)item.payload, sizeof(item.payload), "{\"at_desk\":true,\"duration_mins\": 0}");
 
 					item.payload_length = payload_len;
 
-					// post an item to queue
-					// ! where is portMAX_DELAY defined?
 					if (xQueueSend(mqtt_tx_queue, &item, portMAX_DELAY) == pdPASS) {
 						LogInfo(("Queued MQTT publish: Topic='%s'", MOTION_TOPIC));
 					} else {
@@ -128,24 +126,20 @@ void mqtt_publish_task(void *parameters) {
 				break;
 
 			case SESSION_SITTING: // pir HIGH
-				// if last state was sitting, how long did i sit for?
-				// if more than 5 minutes, then publish the data
-
-				// am i still sitting? -no
 				if (!pir_motion_detected) {
 					grace_start_ms = current_time_ms;
 					LogDebug(("Motion lost - entering grace period at %02lu:%02lu:%02lu", hh, mm, ss));
 					session_state = SESSION_GRACE;
 				} else {
 					// if i am still sitting right now
-					// check if enough time has passed for a heart beat
+					// check if enough time has passed for a heart beat (5 mins)
 					// if so, publish a message with the current session duration
 					if (current_time_ms - last_heartbeat_ms >= HEARTBEAT_INTERVAL_MS) {
 						session_duration_mins = MS_TO_MIN(current_time_ms - session_start_ms);
 						size_t payload_len = snprintf(
 						    (char *)item.payload,
 						    sizeof(item.payload),
-						    "{\"sitting\":true,\"duration_mins\": %lu}",
+						    "{\"at_desk\":true,\"duration_mins\": %lu}",
 						    session_duration_mins
 						);
 						item.payload_length = payload_len;
@@ -164,21 +158,18 @@ void mqtt_publish_task(void *parameters) {
 						     ss)
 						);
 
-						last_heartbeat_ms = current_time_ms; // published the data so reset it
+						last_heartbeat_ms = current_time_ms;
 					}
 				}
 				break;
 
 			case SESSION_GRACE: // grace timer running
-				// motion in grace period
 				if (pir_motion_detected) {
 					LogDebug(("Motion resumed in grace period at %02lu:%02lu:%02lu - back to SITTING", hh, mm, ss));
 					session_state = SESSION_SITTING;
 				} else {
-					// no motion in grace period
 					// check if 60s passed (task will be checked twice in this period)
 					if (current_time_ms - grace_start_ms >= GRACE_PERIOD_MS) {
-						// publish total time
 						session_duration_mins = MS_TO_MIN(current_time_ms - session_start_ms);
 						size_t payload_len = snprintf(
 						    (char *)item.payload,
@@ -210,7 +201,7 @@ void mqtt_publish_task(void *parameters) {
 	}
 }
 
-// this task recieves unsollicited messages from aws server
+/* Logs incoming MQTT messages received from AWS via mqtt_rx_queue */
 void mqtt_receive_task(void *parameters) {
 	mqtt_queue_item_t item;
 
@@ -225,6 +216,7 @@ void mqtt_receive_task(void *parameters) {
 	}
 }
 
+/* Sole USART2 owner: drain the TX queue (send publishes) & poll for incoming MQTT RX data */
 void at_cmd_dispatcher_task(void *parameters) {
 	(void)parameters;
 
@@ -239,6 +231,8 @@ void at_cmd_dispatcher_task(void *parameters) {
 	mqtt_data.p_topic = topic_buffer;
 	mqtt_data.topic_length = sizeof(topic_buffer);
 	mqtt_data.payload_length = sizeof(payload_buffer);
+
+	while(1) {
 
 	// 1. De-queue MQTT TX queue
 	if (xQueueReceive(mqtt_tx_queue, &item, 0) == pdPASS) {
@@ -269,8 +263,9 @@ void at_cmd_dispatcher_task(void *parameters) {
 			}
 		}
 	}
+}
 
-	// 3. check for incoming MQTT data (check esp32_recv_mqtt_data() in  esp32_at.c)
+	// 3. check for incoming MQTT data
 	esp32_status_t rx_status = esp32_recv_mqtt_data(&mqtt_data);
 
 	if (rx_status != ESP32_ERROR && mqtt_data.payload_length > 0) {
@@ -374,15 +369,14 @@ int main(void) {
 	}
 	LogInfo(("Successfully connected to MQTT broker: %s", MQTT_BROKER));
 
-	LogInfo(("Subscribing to topic: %s", SENSOR_DATA_TOPIC));
-	if (mqtt_subscribe(SENSOR_DATA_TOPIC, strlen(SENSOR_DATA_TOPIC)) != MQTT_SUCCESS) {
-		LogError(("Subscription to topic '%s' failed.", SENSOR_DATA_TOPIC));
+	// loop back for subscribing to same topic it's publishing to
+	LogInfo(("Subscribing to topic: %s", MOTION_TOPIC));
+	if (mqtt_subscribe(MOTION_TOPIC, strlen(MOTION_TOPIC)) != MQTT_SUCCESS) {
+		LogError(("Subscription to topic '%s' failed.", MOTION_TOPIC));
 		Error_Handler();
 	}
-	LogInfo(("Successfully Subscribed to topic: %s", SENSOR_DATA_TOPIC));
+	LogInfo(("Successfully Subscribed to topic: %s", MOTION_TOPIC));
 
-	/* Create queues */
-	// queue length = 5
 	mqtt_tx_queue = xQueueCreate(5, sizeof(mqtt_queue_item_t));
 	mqtt_rx_queue = xQueueCreate(5, sizeof(mqtt_queue_item_t));
 
