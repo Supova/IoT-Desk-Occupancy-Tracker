@@ -24,9 +24,12 @@
 #include "esp32_at.h"
 #include "application_config.h"
 #include "mqtt_helper.h"
+
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+
+#include "boot_descriptor.h"
 
 /* USER CODE END Includes */
 
@@ -362,11 +365,27 @@ int main(void) {
 
 	/* Configure the MQTT client for TLS */
 	LogInfo(("Connecting to MQTT broker at %s:%d...", MQTT_BROKER, MQTT_PORT));
-	if (mqtt_connect(CLIENT_ID, MQTT_BROKER, MQTT_PORT) != MQTT_SUCCESS) {
+
+	for (uint8_t retry_count = 0; retry_count <= 3; retry_count++) {
+		if (mqtt_connect(CLIENT_ID, MQTT_BROKER, MQTT_PORT) == MQTT_SUCCESS) {
+			LogInfo(("Successfully connected to MQTT broker: %s", MQTT_BROKER));
+			break;
+		}
+
 		LogError(("MQTT connection failed."));
-		Error_Handler();
+		HAL_Delay(5000);
+
+		// last attempt failed, reset system
+		if (retry_count == 3) {
+			NVIC_SystemReset();
+		}
 	}
-	LogInfo(("Successfully connected to MQTT broker: %s", MQTT_BROKER));
+
+	// confirm new firmware boots and connects to MQTT
+	boot_descriptor_t desc;
+	boot_descriptor_read(&desc);
+	desc.slot_confirmed = 1;
+	boot_descriptor_write(&desc);
 
 	// loop back for subscribing to same topic it's publishing to
 	LogInfo(("Subscribing to topic: %s", MOTION_TOPIC));
