@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "boot_descriptor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -31,7 +31,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define SLOT_A_ADDR 0x08020000
+#define SLOT_B_ADDR 0x08040000
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -54,6 +55,19 @@ static void MX_GPIO_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+static void jump_to_app(uint32_t app_addr) {
+	uint32_t app_sp = *(uint32_t *)app_addr;
+	uint32_t app_reset = *(uint32_t *)(app_addr + 4);
+
+	__disable_irq();
+	SysTick->CTRL = 0;
+
+	__set_MSP(app_sp);
+
+	void (*jump)(void) = (void (*)(void))app_reset;
+	jump();
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -75,7 +89,6 @@ int main(void) {
 
 	/* USER CODE END Init */
 
-
 	/* USER CODE BEGIN SysInit */
 
 	/* USER CODE END SysInit */
@@ -83,6 +96,40 @@ int main(void) {
 	/* Initialize all configured peripherals */
 	MX_GPIO_Init();
 	/* USER CODE BEGIN 2 */
+
+	boot_descriptor_t desc;
+	boot_descriptor_read(&desc);
+	descriptor_status_t status = boot_descriptor_check_validity(&desc);
+
+	if (status == DESCRIPTOR_BLANK) {
+		desc.active_slot = SLOT_A;
+		desc.slot_a_valid = SLOT_VALID_MAGIC;
+		desc.slot_b_valid = 0;
+		desc.boot_try_count = 0;
+		desc.slot_confirmed = 0;
+		boot_descriptor_write(&desc);
+		jump_to_app(SLOT_A_ADDR);
+
+	} else if (status == DESCRIPTOR_VALID) {
+		uint32_t jump_addr = (desc.active_slot == SLOT_B) ? SLOT_B_ADDR : SLOT_A_ADDR;
+
+		if (desc.slot_confirmed == 1) {
+			jump_to_app(jump_addr);
+
+		} else if (desc.boot_try_count > 0) {
+			desc.boot_try_count--;
+			boot_descriptor_write(&desc);
+			jump_to_app(jump_addr);
+
+		} else {
+			desc.active_slot = SLOT_A;
+			boot_descriptor_write(&desc);
+			jump_to_app(SLOT_A_ADDR);
+		}
+
+	} else {
+		jump_to_app(SLOT_A_ADDR);
+	}
 
 	/* USER CODE END 2 */
 
@@ -96,7 +143,6 @@ int main(void) {
 	}
 	/* USER CODE END 3 */
 }
-
 
 /**
  * @brief GPIO Initialization Function
