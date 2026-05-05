@@ -6,8 +6,8 @@ An embedded IoT project running on the **STM32F407G-DISC1** discovery board. A P
 
 | Directory | Description |
 |-----------|-------------|
-| `001_MQTT_Subscribe_Publish/` | PIR sitting session tracker with FreeRTOS — publishes session data to AWS IoT Core |
-| `002_OTA_Firmware_Update/` | Extends project 1 with OTA firmware update via AWS IoT Jobs and MQTT File Streams |
+| `app/` | PIR sitting session tracker with FreeRTOS — publishes session data to AWS IoT Core |
+| `bootloader/` | Thin A/B bootloader — reads boot descriptor, selects active slot, jumps to app |
 
 ---
 
@@ -61,12 +61,12 @@ The ESP32 acts purely as a modem here. The STM32 owns all the application logic.
 
 Three FreeRTOS tasks, one queue-based UART dispatcher:
 
-![System architecture](001_MQTT_Subscribe_Publish/Docs/system_architecture.jpg)
+![System architecture](app/Docs/system_architecture.jpg)
 
 
 **Sitting session state machine:**
 
-![PIR session state machine](001_MQTT_Subscribe_Publish/Docs/pir_state_machine.png)
+![PIR session state machine](app/Docs/pir_state_machine.png)
 
 - `SESSION_IDLE` — waiting for PIR trigger
 - `SESSION_SITTING` — active session, heartbeat every 5 minutes
@@ -94,7 +94,7 @@ The certificates are stored in the ESP32's flash and persist across resets. They
 Copy the example config and fill in your values:
 
 ```
-001_MQTT_Subscribe_Publish/IOT_SDK/config/application_config_example.h  →  001_MQTT_Subscribe_Publish/IOT_SDK/config/application_config.h
+app/IOT_SDK/config/application_config_example.h  →  app/IOT_SDK/config/application_config.h
 ```
 
 ```c
@@ -130,16 +130,17 @@ Watch the debug output on USART2.
 ## Project structure
 
 ```
-001_MQTT_Subscribe_Publish/
+app/
   Core/Src/main.c                   — application entry, FreeRTOS tasks, PIR ISR
   IOT_SDK/BSP/esp32_at.c            — AT command wrappers (connect, publish, subscribe, receive)
   IOT_SDK/BSP/esp32_at_io.c         — DMA circular buffer RX, UART send/receive primitives
   IOT_SDK/mqtt_helper/mqtt_helper.c — MQTT connect/publish/subscribe built on esp32_at.c
   IOT_SDK/config/application_config.h — all credentials and constants (not committed)
 
-002_OTA_Firmware_Update/
-  Core/Src/ota_application.c        — AWS IoT Jobs + MQTT File Streams download and flash logic
-  IOT_SDK/BSP/utils/ota_flash.c     — STM32 internal flash erase/write
+bootloader/
+  Core/Src/main.c                   — HAL init, boot descriptor check, jump to app
+  Core/Src/boot_descriptor.c        — flash read/write/validity check for boot descriptor
+  Core/Inc/boot_descriptor.h        — boot_descriptor_t struct, enums, defines
 ```
 
 Third-party code under `IOT_SDK/Thirdparty/` in each project:
