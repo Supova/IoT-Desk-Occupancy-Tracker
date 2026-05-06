@@ -3,6 +3,7 @@
  *
  *  Created on: Apr 15, 2025
  *      Author: Shreyas Acharya, BHARATI SOFTWARE
+ *  Modified by Supova: added fileChecksum parsing for CRC32 verification
  */
 #include "custom_job_parser.h"
 
@@ -43,6 +44,21 @@ int8_t custom_parser_parse_job_doc_file( const char * job_doc,
   memcpy(size_buf, json_value, json_value_length);
   size_buf[json_value_length] = '\0';
   result->file_size = (uint32_t)atoi(size_buf);
+
+  /* Parse "files[0].fileChecksum" */
+  json_result = JSON_SearchConst(job_doc,
+                                 job_doc_length,
+                                 "files[0].fileChecksum",
+                                 21U,
+                                 &json_value,
+                                 &json_value_length,
+                                 NULL);
+  if (json_result != JSONSuccess) return -1;
+
+  char checksum_buf[12] = {0};
+  memcpy(checksum_buf, json_value, json_value_length);
+  checksum_buf[json_value_length] = '\0';
+  result->file_checksum = (uint32_t)strtoul(checksum_buf, NULL, 0);
 
   return 0;
 }

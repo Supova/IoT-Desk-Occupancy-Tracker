@@ -3,7 +3,8 @@
  *
  *  Created on: Mar 25, 2025
  *      Author: Shreyas Acharya, BHARATI SOFTWARE
- *  Modified by Supova: target slot derived from boot descriptor for A/B OTA
+ *  Modified by Supova: target slot derived from boot descriptor for A/B OTA,
+ *                      CRC32 verification before accepting download
  */
 
 #include <assert.h>
@@ -35,6 +36,7 @@ static uint32_t current_block_offset = 0;
 static uint8_t current_file_id = 0;
 static uint32_t total_bytes_received = 0;
 static uint32_t ota_target_address = 0;
+static uint32_t expected_checksum = 0;
 char global_job_id[MAX_JOB_ID_LENGTH] = {0};
 
 static void handle_mqtt_streams_block_arrived(uint8_t *data, size_t data_length);
@@ -200,6 +202,7 @@ static void process_job_file(custom_job_doc_fields_t *params) {
 	current_file_id = params->file_id;
 	current_block_offset = 0;
 	total_bytes_received = 0;
+	expected_checksum = params->file_checksum;
 
 	mqttDownloader_init(
 	    &mqtt_file_downloader_context,
@@ -357,6 +360,16 @@ static void finish_download() {
 	char message_buffer[UPDATE_JOB_MSG_LENGTH] = {0};
 	mqtt_queue_item_t queue_item = {0};
 
+	/* Verify CRC32 over downloaded flash region using STM32 hardware CRC peripheral */
+	__HAL_RCC_CRC_CLK_ENABLE();
+	CRC->CR = CRC_CR_RESET;
+	uint32_t *data = (uint32_t *)ota_target_address;
+	uint32_t words = total_bytes_received / 4;
+	for (uint32_t i = 0; i < words; i++) {
+		CRC->DR = data[i];
+	}
+	uint32_t computed_crc = CRC->DR;
+
 	Jobs_Update(
 	    topic_buffer,
 	    TOPIC_BUFFER_SIZE,
@@ -366,6 +379,22 @@ static void finish_download() {
 	    strlen(global_job_id),
 	    &topic_buffer_length
 	);
+
+	if (computed_crc != expected_checksum) {
+		LogError(("CRC mismatch: expected 0x%08lX, got 0x%08lX", expected_checksum, computed_crc));
+
+		size_t message_buffer_length = Jobs_UpdateMsg(Failed, "CRC mismatch", 12U, message_buffer, UPDATE_JOB_MSG_LENGTH);
+		queue_item.operation = MQTT_OPERATION_PUBLISH;
+		queue_item.payload_length = message_buffer_length;
+		queue_item.topic_length = topic_buffer_length;
+		memcpy(queue_item.payload, message_buffer, message_buffer_length);
+		memcpy(queue_item.topic, topic_buffer, topic_buffer_length);
+
+		if (xQueueSend(mqtt_tx_queue, &queue_item, portMAX_DELAY) != pdPASS) {
+			LogError(("Failed to queue MQTT publish: Topic='%s'", topic_buffer));
+		}
+		return;
+	}
 
 	size_t message_buffer_length = Jobs_UpdateMsg(Succeeded, "2", 1U, message_buffer, UPDATE_JOB_MSG_LENGTH);
 
