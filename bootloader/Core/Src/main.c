@@ -61,6 +61,7 @@ static void jump_to_app(uint32_t app_addr) {
 
 	__disable_irq();
 	SysTick->CTRL = 0;
+	SCB->VTOR = app_addr;
 
 	__set_MSP(app_sp);
 
