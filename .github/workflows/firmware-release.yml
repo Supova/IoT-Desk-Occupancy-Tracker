@@ -195,15 +195,22 @@ jobs:
         env:
           THING_NAME: ${{ secrets.CLIENT_ID }}
         run: |
-          SHADOW_JSON=$(aws iot-data get-thing-shadow \
-            --thing-name "$THING_NAME" \
-            --output text --query 'payload')
-
-          ACTIVE=$(python3 -c "
-          import sys, json
-          d = json.loads('''${SHADOW_JSON}''')
+          # AWS CLI v2 requires get-thing-shadow to write to a file.
+          # Write to a temp file then read it back.
+          # If the shadow doesn't exist yet (device hasn't booted and reported),
+          # default to slot A so the first OTA targets slot B.
+          if aws iot-data get-thing-shadow \
+               --thing-name "$THING_NAME" \
+               /tmp/shadow.json 2>/dev/null; then
+            ACTIVE=$(python3 -c "
+          import json
+          d = json.load(open('/tmp/shadow.json'))
           print(d['state']['reported'].get('active_slot', 'A'))
-          ")
+            ")
+          else
+            echo "No Thing Shadow found — defaulting active slot to A"
+            ACTIVE="A"
+          fi
 
           echo "active_slot=${ACTIVE}" >> "$GITHUB_OUTPUT"
 
