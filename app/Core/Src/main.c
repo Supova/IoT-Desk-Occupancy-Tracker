@@ -316,7 +316,7 @@ int main(void) {
 
 	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
 	HAL_Init();
-	
+
 	/* USER CODE BEGIN Init */
 	__enable_irq();
 
@@ -419,6 +419,26 @@ int main(void) {
 	boot_descriptor_read(&desc);
 	desc.slot_confirmed = 1;
 	boot_descriptor_write(&desc);
+
+	// Publish active_slot to Thing Shadow so CI/CD targets the correct slot on next deploy 
+	const char active_slot_char = (desc.active_slot == SLOT_A) ? 'A' : 'B';
+	char shadow_topic[MAX_MQTT_TOPIC_SIZE];
+	char shadow_payload[64];
+
+	snprintf(shadow_topic, sizeof(shadow_topic), "$aws/things/%s/shadow/update", CLIENT_ID);
+	snprintf(
+	    shadow_payload,
+	    sizeof(shadow_payload),
+	    "{\"state\":{\"reported\":{\"active_slot\":\"%c\"}}}",
+	    active_slot_char
+	);
+
+	if (mqtt_publish(shadow_topic, strlen(shadow_topic), (uint8_t *)shadow_payload, strlen(shadow_payload)) !=
+	    MQTT_SUCCESS) {
+		LogError(("Failed to publish active_slot to Thing Shadow."));
+	} else {
+		LogInfo(("Published active_slot '%c' to Thing Shadow.", active_slot_char));
+	}
 
 	// temporary debug — blink blue LED (PD15) 10 times to confirm esp32_init passed
 	for (int i = 0; i < 10; i++) {
