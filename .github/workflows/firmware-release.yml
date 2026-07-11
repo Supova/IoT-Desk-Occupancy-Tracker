@@ -155,13 +155,17 @@ jobs:
           echo "Slot A — size: ${SLOT_A_SIZE} B, CRC: ${SLOT_A_CRC}"
           echo "Slot B — size: ${SLOT_B_SIZE} B, CRC: ${SLOT_B_CRC}"
 
+      - name: Stage firmware binaries
+        run: |
+          mkdir -p staging
+          cp app/build/slotA/app.bin staging/slotA.bin
+          cp app/build/slotB/app.bin staging/slotB.bin
+
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ steps.version.outputs.version }}
-          path: |
-            app/build/slotA/app.bin
-            app/build/slotB/app.bin
+          path: staging/
 
   # ---------------------------------------------------------------------------
   # DEPLOY — pick inactive slot, upload to S3, create Stream + Job
@@ -179,6 +183,9 @@ jobs:
         with:
           name: firmware-${{ needs.build.outputs.version }}
           path: firmware/
+
+      - name: List downloaded artifacts
+        run: ls -lh firmware/
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -229,11 +236,11 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           if [ "$TARGET" = "A" ]; then
-            BIN="firmware/app/build/slotA/app.bin"
+            BIN="firmware/slotA.bin"
             SIZE="${{ needs.build.outputs.slot_a_size }}"
             CRC="${{ needs.build.outputs.slot_a_crc }}"
           else
-            BIN="firmware/app/build/slotB/app.bin"
+            BIN="firmware/slotB.bin"
             SIZE="${{ needs.build.outputs.slot_b_size }}"
             CRC="${{ needs.build.outputs.slot_b_crc }}"
           fi
