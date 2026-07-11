@@ -25,9 +25,6 @@
 /* Exported functions --------------------------------------------------------*/
 int8_t  esp32_io_init(void);
 void    esp32_io_deinit(void);
-void    io_buff_reset(void);
-int8_t  uart_dma_restart(void);
-
 int8_t  esp32_io_send(uint8_t *Buffer, uint32_t Length);
 int32_t esp32_io_recv(uint8_t *Buffer, uint32_t Length);
 int32_t esp32_io_recv_nb(uint8_t *buffer, uint32_t length);

@@ -614,7 +614,6 @@ static esp32_status_t recv_mqtt_data(mqtt_receive_t *p_receive_info) {
  * @retval returns ESP32_OK on success and ESP32_ERROR otherwise.
  */
 esp32_status_t esp32_send_data(uint8_t *buffer, uint32_t length) {
-	// uart_dma_restart();
 	esp32_status_t ret = ESP32_OK;
 
 	if (buffer != NULL) {

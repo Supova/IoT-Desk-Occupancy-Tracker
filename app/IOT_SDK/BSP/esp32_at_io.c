@@ -3,6 +3,9 @@
  *
  * Created on: Dec 27, 2024
  * Author: Shreyas Acharya, BHARATI SOFTWARE
+ * Modified by Supova: Fix DMA circular buffer wrap-around in HAL_UARTEx_RxEventCallback;
+ *                     remove const from DMA receive buffer (UB as compiler may place const
+ *                     globals in read-only memory, DMA cannot write to flash)
  */
 
 /* Includes ------------------------------------------------------------------*/
@@ -15,7 +18,7 @@
 
 /* Private typedef -----------------------------------------------------------*/
 typedef struct {
-  const uint8_t data [ RING_BUFFER_SIZE ];
+  uint8_t data [ RING_BUFFER_SIZE ];
   uint16_t tail;
   uint16_t head;
 } ring_buffer_t;
@@ -125,14 +128,14 @@ int32_t esp32_io_recv_nb(uint8_t *buffer, uint32_t length) {
   * @brief  Reception Event Callback (Rx event notification called after use of advanced reception service).
   * @param  huart UART handle
   * @param  Size  Number of data available in application reception buffer (indicates a position in
-  *               reception buffer until which, data are available)
+  *               reception buffer until which, data are available - write pointer)
   * @retval None
   */
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size) {
   if ( huart == ESP32_UART_HANDLE ) {
     static uint16_t tail_pos = 0;
 
-    if ( size > tail_pos ) {
+    if ( size != tail_pos ) {  // handle wrap around case
       tail_pos = size % RING_BUFFER_SIZE;
       if ( tail_pos != wifi_rx_buffer.head ) {
         wifi_rx_buffer.tail = tail_pos;
