@@ -10,7 +10,8 @@ Algorithm parameters:
   XOR out    : 0x00000000
 
 Usage:
-  python compute_crc32.py <firmware.bin>
+  python compute_crc32.py <firmware.bin>           # human-readable output
+  python compute_crc32.py --decimal <firmware.bin> # print only the decimal integer (for CI scripting)
 
 The printed hex value is to be embeded in the AWS IoT Job document as:
   "files": [{ "fileChecksum": <value>, ... }]
@@ -18,6 +19,7 @@ The printed hex value is to be embeded in the AWS IoT Job document as:
 
 import sys
 import struct
+import argparse
 
 POLY = 0x04C11DB7
 INIT = 0xFFFFFFFF
@@ -70,26 +72,34 @@ def crc32_mpeg2(data: bytes) -> int:
 
 
 def main():
-    if len(sys.argv) != 2:
-        print(f"Usage: python {sys.argv[0]} <firmware.bin>")
-        sys.exit(1)
-
-    bin_path = sys.argv[1]
+    parser = argparse.ArgumentParser(description="Compute STM32 CRC-32/MPEG-2 over a firmware binary")
+    parser.add_argument("bin_path", help="Path to firmware .bin file")
+    parser.add_argument(
+        "--decimal",
+        action="store_true",
+        help="Print only the decimal CRC integer (for CI scripting — no other output)",
+    )
+    args = parser.parse_args()
 
     try:
-        with open(bin_path, 'rb') as f:
+        with open(args.bin_path, 'rb') as f:
             firmware = f.read()
     except FileNotFoundError:
-        print(f"Error: file not found: {bin_path}")
+        print(f"Error: file not found: {args.bin_path}", file=sys.stderr)
         sys.exit(1)
 
     if len(firmware) == 0:
-        print("Error: file is empty")
+        print("Error: file is empty", file=sys.stderr)
         sys.exit(1)
 
     checksum = crc32_mpeg2(firmware)
 
-    print(f"File   : {bin_path}")
+    if args.decimal:
+        # Machine-readable output for CI: just the integer, nothing else.
+        print(checksum)
+        return
+
+    print(f"File   : {args.bin_path}")
     print(f"Size   : {len(firmware)} bytes")
     print(f"CRC-32 : 0x{checksum:08X} ({checksum})")
     print()
