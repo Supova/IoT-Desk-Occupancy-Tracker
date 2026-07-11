@@ -31,6 +31,8 @@
 
 #include "boot_descriptor.h"
 
+#include "ota_application.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -212,8 +214,15 @@ void mqtt_receive_task(void *parameters) {
 		xQueueReceive(mqtt_rx_queue, &item, portMAX_DELAY);
 
 		if (item.operation == MQTT_OPERATION_RECEIVE && item.topic_length > 0 && item.payload_length > 0) {
-			LogInfo(("Topic: %.*s", (int)item.topic_length, item.topic));
-			LogInfo(("Message: %.*s", (int)item.payload_length, item.payload));
+			if (!ota_handle_incoming_mqtt_message(
+			        item.topic,
+			        item.topic_length,
+			        (char *)item.payload,
+			        item.payload_length
+			    )) {
+				LogInfo(("Topic: %.*s", (int)item.topic_length, item.topic));
+				LogInfo(("Message: %.*s", (int)item.payload_length, item.payload));
+			}
 		}
 	}
 }
@@ -283,6 +292,14 @@ void at_cmd_dispatcher_task(void *parameters) {
 	}
 }
 
+void ota_task(void *parameters) {
+	OTA_Status_t status = ota_start();
+	if (status != OTA_SUCCESS) {
+		LogError(("ota_task: ota_start() failed: %d", status));
+	}
+	vTaskDelete(NULL);
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -299,8 +316,9 @@ int main(void) {
 
 	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
 	HAL_Init();
-
+	
 	/* USER CODE BEGIN Init */
+	__enable_irq();
 
 	/* USER CODE END Init */
 
@@ -317,6 +335,21 @@ int main(void) {
 	MX_UART4_Init();
 	MX_USART2_UART_Init();
 	/* USER CODE BEGIN 2 */
+	// temporary debug — blink blue LED (PD15) to confirm app started
+	__HAL_RCC_GPIOD_CLK_ENABLE();
+	GPIO_InitTypeDef g = {0};
+	g.Pin = GPIO_PIN_15;
+	g.Mode = GPIO_MODE_OUTPUT_PP;
+	g.Pull = GPIO_NOPULL;
+	g.Speed = GPIO_SPEED_FREQ_LOW;
+	HAL_GPIO_Init(GPIOD, &g);
+
+	for (int i = 0; i < 5; i++) {
+		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
+		HAL_Delay(300);
+		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET);
+		HAL_Delay(300);
+	}
 
 	/* Initialize the ESP32 Wi-Fi module*/
 	LogInfo(("Initializing Wi-Fi module..."));
@@ -387,6 +420,14 @@ int main(void) {
 	desc.slot_confirmed = 1;
 	boot_descriptor_write(&desc);
 
+	// temporary debug — blink blue LED (PD15) 10 times to confirm esp32_init passed
+	for (int i = 0; i < 10; i++) {
+		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
+		HAL_Delay(150);
+		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET);
+		HAL_Delay(150);
+	}
+
 	// loop back for subscribing to same topic it's publishing to
 	LogInfo(("Subscribing to topic: %s", MOTION_TOPIC));
 	if (mqtt_subscribe(MOTION_TOPIC, strlen(MOTION_TOPIC)) != MQTT_SUCCESS) {
@@ -394,6 +435,30 @@ int main(void) {
 		Error_Handler();
 	}
 	LogInfo(("Successfully Subscribed to topic: %s", MOTION_TOPIC));
+
+	const char *jobs_topic = "$aws/things/" CLIENT_ID "/jobs/start-next/accepted";
+	LogInfo(("Subscribing to OTA Jobs topic..."));
+	if (mqtt_subscribe(jobs_topic, strlen(jobs_topic)) != MQTT_SUCCESS) {
+		LogError(("Subscription to OTA Jobs topic failed."));
+	} else {
+		LogInfo(("Successfully Subscribed to OTA Jobs topic."));
+	}
+
+	const char *job_update_accepted_topic = "$aws/things/" CLIENT_ID "/jobs/+/update/accepted";
+	LogInfo(("Subscribing to OTA Job update accepted topic..."));
+	if (mqtt_subscribe(job_update_accepted_topic, strlen(job_update_accepted_topic)) != MQTT_SUCCESS) {
+		LogError(("Subscription to OTA Job update accepted topic failed."));
+	} else {
+		LogInfo(("Successfully Subscribed to OTA Job update accepted topic."));
+	}
+
+	const char *job_update_rejected_topic = "$aws/things/" CLIENT_ID "/jobs/+/update/rejected";
+	LogInfo(("Subscribing to OTA Job update rejected topic..."));
+	if (mqtt_subscribe(job_update_rejected_topic, strlen(job_update_rejected_topic)) != MQTT_SUCCESS) {
+		LogError(("Subscription to OTA Job update rejected topic failed."));
+	} else {
+		LogInfo(("Successfully Subscribed to OTA Job update rejected topic."));
+	}
 
 	mqtt_tx_queue = xQueueCreate(5, sizeof(mqtt_queue_item_t));
 	mqtt_rx_queue = xQueueCreate(5, sizeof(mqtt_queue_item_t));
@@ -413,6 +478,9 @@ int main(void) {
 	configASSERT(status == pdPASS);
 
 	status = xTaskCreate(at_cmd_dispatcher_task, "MQTT Send and Receive", 2048, NULL, 1, NULL);
+	configASSERT(status == pdPASS);
+
+	status = xTaskCreate(ota_task, "OTA Check", 2048, NULL, 2, NULL);
 	configASSERT(status == pdPASS);
 
 	vTaskStartScheduler();

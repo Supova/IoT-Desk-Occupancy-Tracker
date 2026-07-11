@@ -37,6 +37,7 @@ static uint8_t current_file_id = 0;
 static uint32_t total_bytes_received = 0;
 static uint32_t ota_target_address = 0;
 static uint32_t expected_checksum = 0;
+uint32_t flash_write_address = 0;
 char global_job_id[MAX_JOB_ID_LENGTH] = {0};
 
 static void handle_mqtt_streams_block_arrived(uint8_t *data, size_t data_length);
@@ -117,7 +118,7 @@ bool ota_handle_incoming_mqtt_message(char *topic, size_t topic_length, char *me
 
 				handled = mqttDownloader_processReceivedDataBlock(
 				    &mqtt_file_downloader_context,
-				    message,
+				    (uint8_t *)message,
 				    message_length,
 				    &file_id,
 				    &block_id,
@@ -325,7 +326,6 @@ static void request_data_block(void) {
 /**
  * @brief Handles incoming OTA data block from MQTT Streams and writes it to flash.
  */
-uint32_t flash_write_address = 0;
 static void handle_mqtt_streams_block_arrived(uint8_t *data, size_t data_length) {
 
 	uint32_t flash_length = data_length / 4;
@@ -383,7 +383,8 @@ static void finish_download() {
 	if (computed_crc != expected_checksum) {
 		LogError(("CRC mismatch: expected 0x%08lX, got 0x%08lX", expected_checksum, computed_crc));
 
-		size_t message_buffer_length = Jobs_UpdateMsg(Failed, "CRC mismatch", 12U, message_buffer, UPDATE_JOB_MSG_LENGTH);
+		size_t message_buffer_length =
+		    Jobs_UpdateMsg(Failed, "CRC mismatch", 12U, message_buffer, UPDATE_JOB_MSG_LENGTH);
 		queue_item.operation = MQTT_OPERATION_PUBLISH;
 		queue_item.payload_length = message_buffer_length;
 		queue_item.topic_length = topic_buffer_length;
@@ -414,9 +415,9 @@ static void finish_download() {
 
 	boot_descriptor_t desc;
 	boot_descriptor_read(&desc);
-	desc.active_slot    = (ota_target_address == USER_FLASH_SECOND_SECTOR_ADDRESS) ? SLOT_B : SLOT_A;
-	desc.slot_b_valid   = (desc.active_slot == SLOT_B) ? SLOT_VALID_MAGIC : desc.slot_b_valid;
-	desc.slot_a_valid   = (desc.active_slot == SLOT_A) ? SLOT_VALID_MAGIC : desc.slot_a_valid;
+	desc.active_slot = (ota_target_address == USER_FLASH_SECOND_SECTOR_ADDRESS) ? SLOT_B : SLOT_A;
+	desc.slot_b_valid = (desc.active_slot == SLOT_B) ? SLOT_VALID_MAGIC : desc.slot_b_valid;
+	desc.slot_a_valid = (desc.active_slot == SLOT_A) ? SLOT_VALID_MAGIC : desc.slot_a_valid;
 	desc.boot_try_count = 1;
 	desc.slot_confirmed = 0;
 	boot_descriptor_write(&desc);
